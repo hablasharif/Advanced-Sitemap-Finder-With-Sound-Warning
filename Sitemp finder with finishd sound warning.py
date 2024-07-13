@@ -1,33 +1,57 @@
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import os
+import csv
 import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
-import os
-from datetime import datetime
-import csv
 import pyttsx3
+from time import sleep
+from threading import Thread
+from urllib.parse import urljoin
+from fake_useragent import UserAgent
 
 # Define the list of sitemap URLs
 sitemap_urls_list = [
-    'https://banglasobis.blogspot.com//sitemap.xml',
+    'https://anix.to/sitemap.xml',
     # Add more sitemap URLs here as needed
 ]
 
-# Function to extract URLs from a given sitemap.xml URL
-def extract_urls_from_sitemap(url):
+# Function to extract URLs from a given sitemap.xml URL (including sub-sitemaps) with retry mechanism
+def extract_urls_from_sitemap(url, retries=3):
     urls = []
-    try:
-        # Fetch the sitemap.xml content
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an exception for HTTP errors
-        soup = BeautifulSoup(response.text, 'xml')
+    attempt = 0
+    while attempt < retries:
+        try:
+            # Generate a random user agent
+            user_agent = UserAgent().random
 
-        # Find all <loc> tags (URLs) within the sitemap
-        loc_tags = soup.find_all('loc')
-        for loc in loc_tags:
-            urls.append(loc.text)
-    except requests.RequestException as e:
-        print(f"Error fetching {url}: {e}")
+            # Fetch the sitemap.xml content with a random User-Agent
+            headers = {'User-Agent': user_agent}
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            soup = BeautifulSoup(response.text, 'xml')
+
+            # Find all <loc> tags (URLs) within the sitemap
+            loc_tags = soup.find_all('loc')
+            for loc in loc_tags:
+                urls.append(loc.text)
+
+            # Check for sub-sitemaps and extract URLs from them recursively
+            sub_sitemaps = soup.find_all('sitemap')
+            for sub_sitemap in sub_sitemaps:
+                sub_sitemap_url = sub_sitemap.find('loc').text
+                urls.extend(extract_urls_from_sitemap(sub_sitemap_url))
+
+            break  # Exit the loop if successful
+        except requests.RequestException as e:
+            print(f"Error fetching {url}: {e}")
+            attempt += 1
+            sleep(1)  # Wait before retrying
+        except Exception as e:
+            print(f"Error parsing {url}: {e}")
+            break  # Exit loop on other exceptions
+
     return urls
 
 # Function to save extracted URLs to a CSV file with custom filename
@@ -57,21 +81,42 @@ def open_file(file_path):
         print(f"Error opening file: {e}")
 
 # Function to speak a notification using text-to-speech
-def speak_notification():
+def speak_notification(message):
     try:
         engine = pyttsx3.init()
 
         # Adjust speech rate (speed), default is 200
-        engine.setProperty('rate', 150)  # Adjust as needed, lower values slow down speech
+        engine.setProperty('rate', 300)  # Adjust as needed, lower values slow down speech
 
-        engine.say("Hey sharif, Code Running, Finished.")  # Corrected spelling and grammar
+        engine.say(message)
         engine.runAndWait()
     except Exception as e:
         print(f"Error speaking notification: {e}")
 
+# Function to play a custom sound effect
+def play_sound_effect(message):
+    try:
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 150)  # Adjust speech rate as needed
+        engine.say(message)
+        engine.runAndWait()
+    except Exception as e:
+        print(f"Error playing sound effect: {e}")
+
+# Function to play a sound effect and speak notification every 10 seconds
+def play_notifications():
+    for _ in range(10):  # Adjust the range to match the desired duration
+        play_sound_effect("Hey sharif, code running")
+        # speak_notification("Hey sharif, code running")
+        sleep(10)  # Wait for 10 seconds between notifications
+
 # Main function to orchestrate the process
 def main():
     total_urls = 0
+
+    # Start a separate thread for playing notifications
+    notifications_thread = Thread(target=play_notifications)
+    notifications_thread.start()
 
     # Use ThreadPoolExecutor for concurrent processing
     with ThreadPoolExecutor(max_workers=5) as executor:
@@ -97,6 +142,9 @@ def main():
 
         pbar.close()
 
+    # Wait for the notifications thread to complete
+    notifications_thread.join()
+
     print(f"Total URLs extracted: {total_urls}")
 
     if total_urls > 0:
@@ -110,8 +158,13 @@ def main():
             # Open the file after saving
             open_file(file_path)
 
-            # Speak notification
-            speak_notification()
+            # Speak notification after finishing
+            # speak_notification("Your code finished")
+
+            # Additional custom notification
+            print("Your code finished")  # Print message to console
+            play_sound_effect("Your code finished")  # Play custom sound effect
+
     else:
         print("No URLs extracted. Check your sitemap URLs and network connection.")
 
